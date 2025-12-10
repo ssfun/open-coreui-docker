@@ -53,7 +53,7 @@ RUN apt-get update && \
 COPY --from=downloader /downloads/open-coreui /app/open-coreui
 
 # 创建数据目录
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && chmod -R 777 /app/data
 
 # 设置环境变量
 ENV HOST=0.0.0.0
