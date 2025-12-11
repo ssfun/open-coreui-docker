@@ -1,4 +1,4 @@
-# Stage 1: Downloader (保持不变)
+# Stage 1: Downloader (下载器依然可以用 Alpine，省流量)
 FROM alpine:latest AS downloader
 ARG TARGETARCH
 RUN apk add --no-cache curl jq
@@ -12,38 +12,41 @@ RUN echo "Fetching latest version..." && \
     curl -L -f -o open-coreui "https://github.com/xxnuo/open-coreui/releases/download/${LATEST_TAG}/${FILENAME}" && \
     chmod +x open-coreui
 
-# Stage 2: Runtime (改为 Alpine)
-FROM alpine:latest
+# Stage 2: Runtime (必须使用 Debian Slim 以兼容 glibc)
+FROM debian:stable-slim
 
 WORKDIR /app
 
-# 设置时区环境变量
+# 设置时区
 ENV TZ=Asia/Shanghai
 
 # 安装运行时依赖
-# gcompat: 运行 glibc 二进制文件必须
-# aws-cli: 用于 S3 备份
-# sqlite: 用于数据库操作
-# bash: 脚本需要
-# tzdata: 时区支持
-RUN apk add --no-cache \
-    bash \
+# ca-certificates: HTTPS
+# sqlite3: 数据库备份
+# curl: 下载
+# cron: 定时任务
+# awscli: S3/R2 上传
+# tzdata: 时区数据
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     ca-certificates \
-    sqlite \
+    sqlite3 \
     curl \
+    cron \
+    awscli \
     tzdata \
-    aws-cli \
-    gcompat \
-    libstdc++ \
     && \
     # 配置时区
-    cp /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
+    # 清理缓存减小体积
+    rm -rf /var/lib/apt/lists/*
 
 # 复制文件
 COPY --from=downloader /downloads/open-coreui /app/open-coreui
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
 
+# 权限与目录
 RUN chmod +x /app/backup.sh /app/entrypoint.sh && \
     mkdir -p /app/data
 
