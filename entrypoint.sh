@@ -3,6 +3,7 @@ set -e
 
 echo "=========================================="
 echo "Open-CoreUI with R2 Backup"
+echo "Started at: $(date)"
 echo "=========================================="
 
 # 配置 rclone
