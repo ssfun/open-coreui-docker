@@ -29,9 +29,9 @@ docker run -d \
   open-coreui:latest
 ````
 
-### 2\. 配置自动备份 (推荐 Cloudflare R2)
+### 2\. 配置自动备份 (Cloudflare R2)
 
-需提供 R2 或 S3 的访问凭证。
+需提供 R2 访问凭证。
 
 ```bash
 docker run -d \
