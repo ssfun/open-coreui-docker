@@ -8,11 +8,9 @@ echo "=========================================="
 
 # 配置 rclone
 configure_rclone() {
-    echo "[INFO] Configuring rclone for Cloudflare R2..."
-    
-    mkdir -p ~/.config/rclone
-    
-    cat > ~/.config/rclone/rclone.conf << EOF
+    echo "[INFO] Configuring rclone..."
+    mkdir -p /root/.config/rclone
+    cat > /root/.config/rclone/rclone.conf << EOF
 [r2]
 type = s3
 provider = Cloudflare
@@ -20,47 +18,52 @@ access_key_id = ${R2_ACCESS_KEY_ID}
 secret_access_key = ${R2_SECRET_ACCESS_KEY}
 endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
 acl = private
+no_check_bucket = true
 EOF
-
-    echo "[INFO] Rclone configured successfully"
 }
 
-# 检查必要的环境变量
+# 配置 cron
+configure_cron() {
+    echo "[INFO] Configuring cron..."
+    cat > /etc/cron.d/backup << EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+R2_BUCKET_NAME=${R2_BUCKET_NAME}
+BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+
+# 每天凌晨2点和下午2点备份
+0 2 * * * root /app/backup.sh >> /var/log/backup.log 2>&1
+0 14 * * * root /app/backup.sh >> /var/log/backup.log 2>&1
+EOF
+    chmod 644 /etc/cron.d/backup
+    touch /var/log/backup.log
+}
+
+# 检查 R2 配置
 check_r2_config() {
-    if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_ACCESS_KEY_ID" ] || \
-       [ -z "$R2_SECRET_ACCESS_KEY" ] || [ -z "$R2_BUCKET_NAME" ]; then
-        echo "[WARN] R2 configuration incomplete, backup/restore disabled"
-        return 1
-    fi
-    return 0
+    [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && \
+    [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET_NAME" ]
 }
 
 # 主流程
-main() {
-    # 创建日志文件
-    touch /var/log/backup.log
+if check_r2_config; then
+    configure_rclone
+    configure_cron
     
-    # 检查 R2 配置
-    if check_r2_config; then
-        # 配置 rclone
-        configure_rclone
-        
-        # 启动时还原最新备份
-        echo "[INFO] Attempting to restore latest backup..."
-        /app/restore.sh || echo "[WARN] Restore failed or no backup found, starting fresh"
-        
-        # 启动 supercronic 定时任务（后台运行）
-        echo "[INFO] Starting backup scheduler..."
-        supercronic /app/crontab &
-        CROND_PID=$!
-        echo "[INFO] Backup scheduler started (PID: $CROND_PID)"
-    else
-        echo "[WARN] Skipping backup/restore functionality"
-    fi
+    # 启动前恢复（应用未启动，安全）
+    echo "[INFO] Checking for backup to restore..."
+    /app/restore.sh || echo "[WARN] No backup restored"
     
-    # 启动主应用
-    echo "[INFO] Starting Open-CoreUI..."
-    exec /app/open-coreui
-}
+    # 启动 cron 后台运行
+    echo "[INFO] Starting cron..."
+    cron
+else
+    echo "[WARN] R2 not configured, backup disabled"
+fi
 
-main "$@"
+# 启动主应用（前台）
+echo "[INFO] Starting Open-CoreUI..."
+exec /app/open-coreui
