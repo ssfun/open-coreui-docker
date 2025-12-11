@@ -61,23 +61,29 @@ echo "[BACKUP] Local backup file cleaned up"
 # 清理 R2 上的旧备份
 echo "[BACKUP] Cleaning up old backups (keeping last $RETENTION_DAYS days)..."
 
-# 获取所有备份文件列表
+# 计算截止日期
 CUTOFF_DATE=$(date -d "-${RETENTION_DAYS} days" +"%Y%m%d" 2>/dev/null || \
-              date -v-${RETENTION_DAYS}d +"%Y%m%d" 2>/dev/null)
+              date -v-${RETENTION_DAYS}d +"%Y%m%d" 2>/dev/null || \
+              echo "")
 
-echo "[BACKUP] Cutoff date: $CUTOFF_DATE"
-
-# 列出所有备份并删除过期的
-rclone lsf "r2:${BUCKET_NAME}/backups/" 2>/dev/null | while read -r file; do
-    # 提取文件名中的日期部分 (data_YYYYMMDD_HHMMSS.sqlite3 -> YYYYMMDD)
-    FILE_DATE=$(echo "$file" | grep -oP 'data_\K[0-9]{8}' || echo "")
+if [ -z "$CUTOFF_DATE" ]; then
+    echo "[BACKUP] WARNING: Could not calculate cutoff date, skipping cleanup"
+else
+    echo "[BACKUP] Cutoff date: $CUTOFF_DATE"
     
-    if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF_DATE" ]; then
-        echo "[BACKUP] Deleting old backup: $file"
-        rclone delete "r2:${BUCKET_NAME}/backups/${file}"
-    fi
-done
+    # 列出所有备份并删除过期的
+    rclone lsf "r2:${BUCKET_NAME}/backups/" 2>/dev/null | while read -r file; do
+        # 提取文件名中的日期部分 (data_YYYYMMDD_HHMMSS.sqlite3 -> YYYYMMDD)
+        FILE_DATE=$(echo "$file" | sed -n 's/data_\([0-9]\{8\}\)_.*/\1/p')
+        
+        if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF_DATE" ] 2>/dev/null; then
+            echo "[BACKUP] Deleting old backup: $file"
+            rclone delete "r2:${BUCKET_NAME}/backups/${file}"
+        fi
+    done
+    
+    echo "[BACKUP] Cleanup completed"
+fi
 
-echo "[BACKUP] Cleanup completed"
 echo "[BACKUP] Finished at $(date)"
 echo "=========================================="
