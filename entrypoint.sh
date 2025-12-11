@@ -1,33 +1,65 @@
 #!/bin/bash
 set -e
 
-export HOST=${HOST:-0.0.0.0}
-export PORT=${PORT:-8168}
+echo "=========================================="
+echo "Open-CoreUI with R2 Backup"
+echo "=========================================="
 
-echo "--- Open CoreUI Docker Launcher ---"
+# 配置 rclone
+configure_rclone() {
+    echo "[INFO] Configuring rclone for Cloudflare R2..."
+    
+    mkdir -p ~/.config/rclone
+    
+    cat > ~/.config/rclone/rclone.conf << EOF
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = ${R2_ACCESS_KEY_ID}
+secret_access_key = ${R2_SECRET_ACCESS_KEY}
+endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+acl = private
+EOF
 
-# 1. 写入环境变量供 cron 使用（更安全的方式）
-echo "Setting up cron job..."
+    echo "[INFO] Rclone configured successfully"
+}
 
-# 使用更安全的方式写入环境变量，处理特殊字符
-{
-    echo "R2_ACCESS_KEY_ID='${R2_ACCESS_KEY_ID}'"
-    echo "R2_SECRET_ACCESS_KEY='${R2_SECRET_ACCESS_KEY}'"
-    echo "R2_ENDPOINT_URL='${R2_ENDPOINT_URL}'"
-    echo "R2_BUCKET_NAME='${R2_BUCKET_NAME}'"
-} > /etc/environment
+# 检查必要的环境变量
+check_r2_config() {
+    if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_ACCESS_KEY_ID" ] || \
+       [ -z "$R2_SECRET_ACCESS_KEY" ] || [ -z "$R2_BUCKET_NAME" ]; then
+        echo "[WARN] R2 configuration incomplete, backup/restore disabled"
+        return 1
+    fi
+    return 0
+}
 
-# 设置 cron job
-echo "0 2,14 * * * /bin/bash /app/backup.sh backup >> /var/log/backup.log 2>&1" > /etc/cron.d/backup-job
-chmod 0644 /etc/cron.d/backup-job
-crontab /etc/cron.d/backup-job
+# 主流程
+main() {
+    # 创建日志文件
+    touch /var/log/backup.log
+    
+    # 检查 R2 配置
+    if check_r2_config; then
+        # 配置 rclone
+        configure_rclone
+        
+        # 启动时还原最新备份
+        echo "[INFO] Attempting to restore latest backup..."
+        /app/restore.sh || echo "[WARN] Restore failed or no backup found, starting fresh"
+        
+        # 启动 supercronic 定时任务（后台运行）
+        echo "[INFO] Starting backup scheduler..."
+        supercronic /app/crontab &
+        CROND_PID=$!
+        echo "[INFO] Backup scheduler started (PID: $CROND_PID)"
+    else
+        echo "[WARN] Skipping backup/restore functionality"
+    fi
+    
+    # 启动主应用
+    echo "[INFO] Starting Open-CoreUI..."
+    exec /app/open-coreui
+}
 
-# 2. 启动时尝试恢复
-/bin/bash /app/backup.sh restore
-
-# 3. 启动 Cron 服务
-cron
-
-# 4. 启动主程序
-echo "Starting Open CoreUI..."
-exec /app/open-coreui
+main "$@"
