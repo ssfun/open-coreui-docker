@@ -1,29 +1,23 @@
 #!/bin/bash
 
-# --- 1. 环境配置 ---
-CLEAN_ENDPOINT_URL="${R2_ENDPOINT_URL%/}"
-export AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
-export AWS_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
-export AWS_DEFAULT_REGION="us-east-1"
-export BUCKET_NAME="${R2_BUCKET_NAME}"
-
-# 修复 SignatureDoesNotMatch: 强制 s3v4 和 path style
-mkdir -p ~/.aws
-aws configure set default.s3.signature_version s3v4
-aws configure set default.s3.addressing_style path
-aws configure set default.region us-east-1
-
-ENDPOINT_ARG=""
-if [ -n "$CLEAN_ENDPOINT_URL" ]; then
-    ENDPOINT_ARG="--endpoint-url $CLEAN_ENDPOINT_URL"
-fi
+# --- 1. Rclone 动态配置 ---
+# Rclone 支持通过环境变量直接定义配置，无需生成配置文件
+# 定义一个名为 'r2' 的远程连接
+export RCLONE_CONFIG_R2_TYPE="s3"
+export RCLONE_CONFIG_R2_PROVIDER="Cloudflare"
+export RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+export RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT_URL}"
+export RCLONE_CONFIG_R2_ACL="private"
 
 DATA_DIR="/app/data"
 DB_FILE="${DATA_DIR}/data.sqlite3"
 BACKUP_PREFIX="opencoreui_backup_"
+REMOTE_PATH="r2:${R2_BUCKET_NAME}/backups"
 
-if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ] || [ -z "$CLEAN_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ]; then
-    echo "[Backup] Warning: R2 env vars missing. Skipping."
+# 检查配置
+if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ]; then
+    echo "[Backup] Error: R2 env vars missing. Skipping."
     exit 0
 fi
 
@@ -31,23 +25,26 @@ fi
 
 restore_backup() {
     echo "[Restore] Checking R2 for backups..."
-    LATEST_BACKUP=$(aws $ENDPOINT_ARG s3 ls "s3://${BUCKET_NAME}/backups/${BACKUP_PREFIX}" | sort | tail -n 1 | awk '{print $4}')
+    # 使用 lsf 获取最新文件 (按时间排序)
+    LATEST_BACKUP=$(rclone lsf "$REMOTE_PATH/" --files-only --sort-by t | tail -n 1)
     
     if [ -n "$LATEST_BACKUP" ]; then
         echo "[Restore] Found: ${LATEST_BACKUP}. Downloading..."
-        if aws $ENDPOINT_ARG s3 cp "s3://${BUCKET_NAME}/backups/${LATEST_BACKUP}" /tmp/backup.tar.gz; then
-            if [ -f "/tmp/backup.tar.gz" ]; then
-                echo "[Restore] Extracting..."
+        if rclone copy "$REMOTE_PATH/$LATEST_BACKUP" /tmp/; then
+            echo "[Restore] Extracting..."
+            # 双重保险：确保下载成功
+            if [ -f "/tmp/$LATEST_BACKUP" ]; then
+                # 清空当前数据 (注意：这会删除未备份的数据)
                 rm -rf "${DATA_DIR:?}"/*
-                tar -xzf "/tmp/backup.tar.gz" -C "${DATA_DIR}"
-                rm "/tmp/backup.tar.gz"
-                echo "[Restore] Done!"
+                tar -xzf "/tmp/$LATEST_BACKUP" -C "${DATA_DIR}"
+                rm "/tmp/$LATEST_BACKUP"
+                echo "[Restore] Done! Database restored."
             fi
         else
             echo "[Restore] Download failed."
         fi
     else
-        echo "[Restore] No remote backup found."
+        echo "[Restore] No remote backup found. Starting fresh."
     fi
 }
 
@@ -61,10 +58,10 @@ create_backup() {
     rm -rf "$TEMP_DIR" "$LOCAL_BACKUP_PATH"
     mkdir -p "$TEMP_DIR"
 
-    # 复制文件
+    # A. 复制文件
     cp -r "$DATA_DIR/." "$TEMP_DIR/"
 
-    # SQLite 热备份
+    # B. SQLite 热备份 (覆盖)
     if [ -f "$DB_FILE" ]; then
         rm -f "$TEMP_DIR/data.sqlite3"
         if ! sqlite3 "$DB_FILE" "VACUUM INTO '$TEMP_DIR/data.sqlite3'"; then
@@ -73,11 +70,12 @@ create_backup() {
         fi
     fi
 
-    # 压缩
+    # C. 压缩
     (cd "$TEMP_DIR" && tar -czf "$LOCAL_BACKUP_PATH" .)
     
-    # 上传
-    if aws $ENDPOINT_ARG s3 cp "$LOCAL_BACKUP_PATH" "s3://${BUCKET_NAME}/backups/${BACKUP_FILENAME}"; then
+    # D. 上传 (Rclone copy)
+    echo "[Backup] Uploading to $REMOTE_PATH..."
+    if rclone copy "$LOCAL_BACKUP_PATH" "$REMOTE_PATH/"; then
         echo "[Backup] Upload success."
         rm "$LOCAL_BACKUP_PATH"
         rm -rf "$TEMP_DIR"
@@ -86,17 +84,9 @@ create_backup() {
         return 1
     fi
 
-    # 轮转清理
-    echo "[Backup] Cleaning old backups..."
-    OLD_DATE=$(date -d "7 days ago" +%Y%m%d)
-    aws $ENDPOINT_ARG s3 ls "s3://${BUCKET_NAME}/backups/${BACKUP_PREFIX}" | while read -r line; do
-        file_name=$(echo "$line" | awk '{print $4}')
-        file_date=$(echo "$file_name" | grep -oE "[0-9]{8}" | head -1)
-        if [ -n "$file_date" ] && [ "$file_date" -lt "$OLD_DATE" ]; then
-            echo "[Backup] Deleting: $file_name"
-            aws $ENDPOINT_ARG s3 rm "s3://${BUCKET_NAME}/backups/$file_name"
-        fi
-    done
+    # E. 轮转清理 (Rclone 的杀手级功能: 一行命令删除7天前文件)
+    echo "[Backup] Cleaning old backups (>7 days)..."
+    rclone delete "$REMOTE_PATH/" --min-age 7d --include "${BACKUP_PREFIX}*"
 }
 
 case "$1" in
