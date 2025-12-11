@@ -1,4 +1,4 @@
-# Stage 1: Downloader (保持不变)
+# Stage 1: Downloader
 FROM alpine:latest AS downloader
 ARG TARGETARCH
 RUN apk add --no-cache curl jq
@@ -17,31 +17,28 @@ FROM debian:stable-slim
 
 WORKDIR /app
 
-# 设置时区
-ENV TZ=Asia/Shanghai
-
-# 安装依赖：将 awscli 替换为 rclone
+# 安装运行时依赖
+# awscli: 用于 S3/R2 备份
+# sqlite3: 用于数据库热备份
+# cron: 用于定时任务
+# ca-certificates: 用于 HTTPS
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     sqlite3 \
     curl \
     cron \
-    rclone \
-    tzdata \
-    && \
-    # 配置时区
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
-    rm -rf /var/lib/apt/lists/*
+    awscli \
+    && rm -rf /var/lib/apt/lists/*
 
 # 复制文件
 COPY --from=downloader /downloads/open-coreui /app/open-coreui
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
 
+# 权限设置
 RUN chmod +x /app/backup.sh /app/entrypoint.sh && \
-    mkdir -p /app/data \
-    && chmod -R 777 /app/data
+    mkdir -p /app/data
 
 # 环境变量
 ENV HOST=0.0.0.0 \
@@ -50,6 +47,7 @@ ENV HOST=0.0.0.0 \
     ENABLE_RANDOM_PORT=false \
     ENV=production
 
+# 暴露端口和挂载点
 EXPOSE 8168
 VOLUME ["/app/data"]
 
