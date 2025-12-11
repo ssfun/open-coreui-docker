@@ -1,4 +1,4 @@
-# Open CoreUI (Docker + S3 Backup Edition)
+# Open CoreUI (Docker + R2 Backup Edition)
 
 这是一个基于 [Open CoreUI](https://github.com/xxnuo/open-coreui) 官方二进制文件构建的 Docker 镜像，额外增强了 **自动备份与还原** 功能。
 
@@ -9,7 +9,7 @@
 - **轻量级**：基于 Debian Slim 构建，无 Python/NodeJS 臃肿依赖。
 - **多架构支持**：自动适配 `amd64` (x86_64) 和 `arm64` (aarch64)。
 - **数据安全**：
-  - 支持 **Cloudflare R2**、**AWS S3**、**MinIO** 等 S3 兼容存储。
+  - 支持 **Cloudflare R2** 存储。
   - **启动自动还原**：容器启动时自动从云端拉取最新备份。
   - **定时自动备份**：每天凌晨 02:00 和下午 14:00 自动打包数据并上传。
   - **SQLite 热备份**：使用 `VACUUM INTO` 技术，确保在数据库运行时也能生成完整无损的快照。
@@ -40,7 +40,7 @@ docker run -d \
   -v $(pwd)/data:/app/data \
   -e R2_ACCESS_KEY_ID="你的AccessKey" \
   -e R2_SECRET_ACCESS_KEY="你的SecretKey" \
-  -e R2_ENDPOINT_URL="https://<ACCOUNT_ID>.r2.cloudflarestorage.com" \
+  -e R2_ACCOUNT_ID="你的accountID" \
   -e R2_BUCKET_NAME="你的存储桶名称" \
   open-coreui:latest
 ```
@@ -70,8 +70,7 @@ services:
       # --- 备份配置 (Cloudflare R2 示例) ---
       - R2_ACCESS_KEY_ID=xxxxxxxxxxxxxxxx
       - R2_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-      # 注意：Endpoint URL 必须包含 https:// 且不要带 bucket 子路径
-      - R2_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      - R2_ACCOUNT_ID=xxxxxxxxxxxxxxxx
       - R2_BUCKET_NAME=open-coreui-backup
       
       # --- 其他 Open CoreUI 环境变量 ---
@@ -85,23 +84,23 @@ services:
 
 1.  **启动时 (Restore)**：
 
-      * 容器启动时，会自动检查 S3/R2 存储桶中是否有 `opencoreui_backup_` 开头的备份文件。
-      * 如果找到，会自动下载最新的备份并解压覆盖 `/app/data` 目录。
+      * 容器启动时，会自动检查 R2 存储桶中是否有 `data_` 开头的备份文件。
+      * 如果找到，会自动下载最新的备份并解压覆盖 `/app/data/data.sqlite3` 文件。
       * *注意：如果本地数据卷中有数据，启动时的还原操作会覆盖本地数据，请确保这是你想要的行为（无状态设计）。*
 
 2.  **运行时 (Backup)**：
 
       * 内置 Cron 任务固定在 **每天 02:00 和 14:00** 执行备份。
-      * **备份内容**：包含 `data.sqlite3` 数据库（热备份）以及 `/app/data` 下的所有文件（如上传的图片、文档）。
+      * **备份内容**：包含 `data.sqlite3` 数据库（热备份）。
       * **过期清理**：每次备份成功后，会自动检测并删除存储桶中 **7 天前** 的旧备份文件。
 
 ## 🛠️ 环境变量列表
 
 | 变量名 | 描述 | 默认值 |
 | :--- | :--- | :--- |
-| `R2_ACCESS_KEY_ID` | S3/R2 Access Key | 空 (不启用备份) |
-| `R2_SECRET_ACCESS_KEY` | S3/R2 Secret Key | 空 |
-| `R2_ENDPOINT_URL` | S3 API 端点 (需带 https://) | 空 |
+| `R2_ACCESS_KEY_ID` | R2 Access Key | 空 (不启用备份) |
+| `R2_SECRET_ACCESS_KEY` | R2 Secret Key | 空 |
+| `R2_ACCOUNT_ID` | Cloudflare accord ID | 空 |
 | `R2_BUCKET_NAME` | 存储桶名称 | 空 |
 | `HOST` | 监听地址 | `0.0.0.0` |
 | `PORT` | 监听端口 | `8168` |
@@ -120,9 +119,3 @@ docker build -t open-coreui:latest .
 # 强制更新构建 (忽略缓存)
 docker build --build-arg CACHEBUST=$(date +%s) -t open-coreui:latest .
 ```
-
-## ⚠️ 注意事项
-
-1.  **Endpoint 格式**：Cloudflare R2 的 `R2_ENDPOINT_URL` 应该是 `https://<account_id>.r2.cloudflarestorage.com`，**不要**在 URL 后面加 Bucket 名字，AWS CLI 库会自动处理。
-2.  **权限**：提供的 S3 凭证必须拥有 `ListBucket`, `PutObject`, `GetObject`, `DeleteObject` 权限。
-3.  **时区**：Docker 容器默认使用 UTC 时间，Cron 任务的 02:00 和 14:00 也是 UTC 时间。如需修改时区，可挂载 `/etc/localtime` 或设置 `TZ` 环境变量（需 Dockerfile 支持 tzdata）。
