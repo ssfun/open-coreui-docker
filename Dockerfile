@@ -48,7 +48,8 @@ COPY entrypoint.sh /app/entrypoint.sh
 
 # 权限与目录
 RUN chmod +x /app/backup.sh /app/entrypoint.sh && \
-    mkdir -p /app/data
+    mkdir -p /app/data \
+    && chmod -R 777 /app/data
 
 # 环境变量
 ENV HOST=0.0.0.0 \
