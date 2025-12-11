@@ -1,4 +1,4 @@
-# Stage 1: Downloader
+# Stage 1: Downloader (保持不变)
 FROM alpine:latest AS downloader
 ARG TARGETARCH
 RUN apk add --no-cache curl jq
@@ -12,34 +12,40 @@ RUN echo "Fetching latest version..." && \
     curl -L -f -o open-coreui "https://github.com/xxnuo/open-coreui/releases/download/${LATEST_TAG}/${FILENAME}" && \
     chmod +x open-coreui
 
-# Stage 2: Runtime
-FROM debian:stable-slim
+# Stage 2: Runtime (改为 Alpine)
+FROM alpine:latest
 
 WORKDIR /app
 
+# 设置时区环境变量
+ENV TZ=Asia/Shanghai
+
 # 安装运行时依赖
-# awscli: 用于 S3/R2 备份
-# sqlite3: 用于数据库热备份
-# cron: 用于定时任务
-# ca-certificates: 用于 HTTPS
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# gcompat: 运行 glibc 二进制文件必须
+# aws-cli: 用于 S3 备份
+# sqlite: 用于数据库操作
+# bash: 脚本需要
+# tzdata: 时区支持
+RUN apk add --no-cache \
+    bash \
     ca-certificates \
-    sqlite3 \
+    sqlite \
     curl \
-    cron \
-    awscli \
-    && rm -rf /var/lib/apt/lists/*
+    tzdata \
+    aws-cli \
+    gcompat \
+    libstdc++ \
+    && \
+    # 配置时区
+    cp /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # 复制文件
 COPY --from=downloader /downloads/open-coreui /app/open-coreui
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
 
-# 权限设置
 RUN chmod +x /app/backup.sh /app/entrypoint.sh && \
-    mkdir -p /app/data && \
-    chmod -R 777 /app/data
+    mkdir -p /app/data
 
 # 环境变量
 ENV HOST=0.0.0.0 \
@@ -48,7 +54,6 @@ ENV HOST=0.0.0.0 \
     ENABLE_RANDOM_PORT=false \
     ENV=production
 
-# 暴露端口和挂载点
 EXPOSE 8168
 VOLUME ["/app/data"]
 
